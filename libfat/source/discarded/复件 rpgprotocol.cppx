@@ -1,0 +1,235 @@
+#include "rpgprotocol.h"
+#include <stdio.h>
+
+//#define NULL				0
+#define PAGESIZE_0			(0<<24)
+#define PAGESIZE_4			(7<<24)
+#define PAGESIZE_512		(1<<24)
+#define PAGESIZE_1K			(2<<24)
+#define PAGESIZE_2K			(3<<24)
+
+void ioRpgSendCommand( u32 command[2], u32 pageSize, u32 latency, void * buffer )
+{
+	CARD_CR1H = CARD_CR1_ENABLE | CARD_CR1_IRQ;
+
+	for( u32 i=0; i<2; ++i )
+	{
+		CARD_COMMAND[i*4+0] = command[i]>>24;
+		CARD_COMMAND[i*4+1] = command[i]>>16;
+		CARD_COMMAND[i*4+2] = command[i]>>8;
+		CARD_COMMAND[i*4+3] = command[i]>>0;
+	}
+
+	pageSize -= pageSize & 3; // align to 4 byte
+	u32 pageParam = 0;
+	if( pageSize > 1024 ) {
+		pageParam = PAGESIZE_2K;
+	} else if ( pageSize > 512 ) {
+		pageParam = PAGESIZE_1K;
+	} else if ( pageSize > 4 ) {
+		pageParam = PAGESIZE_512;
+	} else if ( pageSize > 0 ) {
+		pageParam = PAGESIZE_4;
+	} else {
+		pageParam = PAGESIZE_0;
+	}
+
+	CARD_CR2 = CARD_nRESET;//| pageParam | latency | 0x00406000; // clear last state (sometimes unaligned to 512)
+	u32 CARDParam = CARD_ACTIVATE | /*CARD_nRESET | */pageParam | latency | 0x00406000/* | ((*(unsigned int*)0x027ffe60) & ~0x07001FFF)*/;
+	if( pageSize != PAGESIZE_0 )
+		CARDParam |= 0x00180000;
+	CARD_CR2 = CARDParam;
+	//if( (command[0]>>24) != 0xb8 )
+	//	printf("send %08x %08x\n", command[0], command[1] );
+
+	u8 * pbuf = (u8 *)buffer;
+	u32 * pbuf32 = (u32 * )buffer;
+	bool useBuf = ( NULL != pbuf );
+	bool useBuf32 = (useBuf && (0 == (3 & ((unsigned int)buffer))));
+	//printf( "buf %d buf32 %d\n", useBuf, useBuf32 );
+	u32 count = 0;
+	while( (CARD_CR2 & CARD_BUSY) && count < pageSize  )
+	{
+		if( CARD_CR2 & CARD_DATA_READY ) {
+			u32 data = CARD_DATA_RD;
+			if( useBuf32 ) {
+				*pbuf32++ = data;
+			}
+			else if ( useBuf ) {
+				pbuf[0] = (unsigned char) (data >>  0);
+				pbuf[1] = (unsigned char) (data >>  8);
+				pbuf[2] = (unsigned char) (data >> 16);
+				pbuf[3] = (unsigned char) (data >> 24);
+				pbuf += sizeof (unsigned int);
+			}
+			count += 4;
+		}
+	}	
+}
+
+void ioRpgWaitCmdBusy()
+{
+	u32 cmd[2] = { 0xB8000000, 0x00000000 };
+	u32 data = 0;
+	do {
+		ioRpgSendCommand( cmd, 4, 0, &data );
+	} while( 0x00000fc2 != data );
+}
+
+void ioRpgSetDeviceStatus( u8 deviceSelection, u8 tables, u32 table0BlockSize, u32 table1BlockSize )
+{
+	u8 byte6 = deviceSelection | (tables<<2);
+	u32 cmd[2] = { 0xD7000000, 
+					(byte6<<16)|(table1BlockSize<<8)|table0BlockSize };
+	//{ table0BlockSize, table1BlockSize, byte6, 00, 00, 00, 00, 0xD7 };
+	ioRpgSendCommand( cmd, 0, 0, NULL );
+}
+
+void ioRpgSetMapTableAddress( u32 tableName, u32 tableInRamAddress )
+{
+	u32 cmd[2] = { 0xD0000000 | (tableInRamAddress >> 8), 
+					((tableInRamAddress & 0xff) << 24) | ((u8)tableName << 16) };
+
+	ioRpgSendCommand( cmd, 0, 0, NULL );
+}
+
+
+u32 ioRpgReadSram4( u32 address )
+{
+	//ioRpgSetDeviceStatus( 0x02, 0x00, 0x00, 0x00 );
+	u32 cmd[2] = { 0xB7000000 | (address >> 8), (address & 0xff) << 24 | 0x00020000  };
+	//{ ((address & 0xff) << 24) | 0x00000000, 0xB7000000 | (address >> 8) };
+	u32 data = 0xFF;
+	ioRpgSendCommand( cmd, 4, 0, &data );
+	return data;
+}
+
+void ioRpgReadSram512( u32 address, void * buffer )
+{
+	//ioRpgSetDeviceStatus( 0x02, 0x00, 0x00, 0x00 );
+	u32 cmd[2] = { 0xB7000000 | (address >> 8), (address & 0xff) << 24 | 0x00020000  };
+	//{ ((address & 0xff) << 24) | 0x00000000, 0xB7000000 | (address >> 8) };
+	ioRpgSendCommand( cmd, 512, 0, buffer );
+}
+
+void ioRpgReadSram528( u32 address, void * buffer )
+{
+	//ioRpgSetDeviceStatus( 0x02, 0x00, 0x00, 0x00 );
+	u32 cmd[2] = { 0xB7000000 | (address >> 8), (address & 0xff) << 24 | 0x00020000  };
+	//{ ((address & 0xff) << 24) | 0x00000000, 0xB7000000 | (address >> 8) };
+	ioRpgSendCommand( cmd, 528, 0, buffer );
+}
+
+void ioRpgWriteSram( u32 address, u32 data, u8 byteCount )
+{
+	byteCount = (byteCount - 1) & 3;
+	// 这个协议比较奇怪，0 表示 1，3表示4，以此类推
+	u32 cmd[2] = { 0xD9000000 | (byteCount << 22) | (address & 0x00ffffff), data };
+	ioRpgSendCommand( cmd, 4, 0, NULL );
+}
+
+void ioRpgWriteSram512( u32 address, void * buffer )
+{
+	u32 * pbuffer32 = (u32 *)buffer;
+	u8 * pbuffer8 = (u8 *)buffer;
+	bool useBuf32 = (0 == (3 & ((u32)buffer)) );
+	for( u8 i = 0; i < 512 / 4; ++i )
+	{
+		if( useBuf32 )
+			ioRpgWriteSram( address, *(pbuffer32+i), 4 );
+		else {
+			u32 data =	(pbuffer8[i*4+3]<<24) | 
+						(pbuffer8[i*4+2]<<16) | 
+						(pbuffer8[i*4+1]<<8) | 
+						(pbuffer8[i*4+0]<<0);
+			ioRpgWriteSram( address, data, 4 );
+		}
+		address += 4;
+	}
+}
+
+void ioRpgReadNand512( u32 address, void * buffer )
+{
+	//ioRpgSetDeviceStatus( 0x01, 0x00, 0x00, 0x00 );
+	u32 cmd[2] = { 0xB7000000 | (address >> 8), ((address & 0xff) << 24) | 0x00010000 };
+	ioRpgSendCommand( cmd, 512, 0x80, buffer );
+
+	//ioRpgPageCopyNandToSram( address, 0 );
+	//ioRpgReadSram512( 0, buffer );
+
+}
+
+void ioRpgReadNand528( u32 address, void * buffer )
+{
+	//ioRpgSetDeviceStatus( 0x01, 0x00, 0x00, 0x00 );
+	u32 cmd[2] = { 0xB7000000 | (address >> 8), ((address & 0xff) << 24) | 0x00010000 };
+	ioRpgSendCommand( cmd, 528, 0x80, buffer );
+
+	//ioRpgPageCopyNandToSram( address, 0 );
+	//ioRpgReadSram528( 0, buffer );
+
+}
+
+void ioRpgReadNandRedundant( u32 address, void * buffer )
+{
+	//ioRpgSetDeviceStatus( 0x01, 0x00, 0x00, 0x00 );
+	u32 cmd[2] = { 0xB7000000 | (address >> 8), ((address & 0xff) << 24) | 0x00810000 };
+	ioRpgSendCommand( cmd, 16, 0x80, buffer );
+}
+
+void ioRpgPageCopySramToNand( u32 src, u32 dest )
+{
+	u32 cmd[2] = { 0xDA000000 | (src & 0x00ffffff), dest };
+	ioRpgSendCommand( cmd, 0, 0, NULL );
+	ioRpgWaitCmdBusy();
+}
+
+void ioRpgPageCopyNandToSram( u32 src, u32 dest )
+{
+	u32 cmd[2] = { 0xDB000000 | (dest & 0x00ffffff), src };
+	ioRpgSendCommand( cmd, 0, 0, NULL );
+	ioRpgWaitCmdBusy();
+}
+
+void ioRpgEraseNand( u32 blockAddr )
+{
+	//block <<= 17;
+	u32 cmd[2] = { 0xD6030000, blockAddr };
+	ioRpgSendCommand( cmd, 0, 0, NULL );
+	ioRpgWaitCmdBusy();
+}
+
+//void ioRpgNandPageCopy( u32 src, u32 dest )
+//{
+//	// empty now
+//}
+
+void ioRpgReadSD512( u32 address, void * buffer )
+{
+	ioRpgSetDeviceStatus( 0x03, 0x00, 0x00, 0x00 );
+	u32 cmd[2] = { 0xB7000000 | (address >> 8), ((address & 0xff) << 24) };
+	ioRpgSendCommand( cmd, 512, 0xf00, buffer );
+}
+
+void ioRpgPageCopySramToSD( u32 src, u32 dest )
+{
+	u32 cmd[2] = { 0xDC000000 | (src & 0x00ffffff), dest };
+	ioRpgSendCommand( cmd, 0, 0, NULL );
+	ioRpgWaitCmdBusy();
+}
+
+void ioRpgPageCopySDToSram( u32 src, u32 dest )
+{
+	u32 cmd[2] = { 0xDD000000 | (dest & 0x00ffffff), src };
+	ioRpgSendCommand( cmd, 0, 0, NULL );
+	ioRpgWaitCmdBusy();
+}
+
+void ioRpgAsignSaveBlocks( u32 tableAddress, u32 nandAddress[64] )
+{
+	ioRpgSetMapTableAddress( SAVE_TABLE, tableAddress );
+	for( size_t i = 0; i < 64; ++i ) {
+		ioRpgWriteSram( tableAddress + i * 4, nandAddress[i], 4 );
+		//ioRpgWriteSram( tableAddress + i * 4, ((i + 128) << 17), 4 );
+	}
+}

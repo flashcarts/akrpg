@@ -1,0 +1,105 @@
+/*---------------------------------------------------------------------------------
+
+
+Copyright (C) 2007 Acekard, www.acekard.com
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+---------------------------------------------------------------------------------*/
+
+
+
+
+
+
+
+
+
+#ifndef _AKUI_FORM_H_
+#define _AKUI_FORM_H_
+
+#include <list>
+#include "rectangle.h"
+#include "window.h"
+#include "bitmapdesc.h"
+
+namespace akui {
+
+
+class cForm : public cWindow
+{
+
+public:
+
+    cForm( s32 x, s32 y, u32 w, u32 h, cWindow * parent, const std::string & text );
+
+    ~cForm();
+
+public:
+
+    u32 doModal();
+
+    cForm& addChildWindow(cWindow* aWindow);
+
+    cForm& removeChildWindow(cWindow* aWindow);
+
+    cForm& arrangeChildren();
+
+    void draw();
+
+    //cWindow& loadAppearance(const std::string& aFileName );
+
+    bool process( const cMessage & msg );
+
+    cWindow* windowBelow(const cPoint & p);
+
+    u32 modalRet();
+
+    void centerScreen();
+
+protected:
+
+    virtual void onOK();
+
+    virtual void onCancel();
+
+    void onResize();
+
+    void onMove();
+
+    bool processKeyMessage( const cKeyMessage & msg );
+
+    std::list< cWindow * > _childWindows;
+
+    //cFormDesc * _renderDesc;
+    u32 _modalRet;
+
+
+};
+
+
+}
+
+
+
+
+
+
+#endif//_AKUI_FORM_H_
